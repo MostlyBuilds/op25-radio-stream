@@ -1,0 +1,48 @@
+version: "3.9"
+
+services:
+  # MediaMTX: RTSP/HLS server that receives AAC audio from ffmpeg
+  # and serves it out to clients (VLC, browser, etc).
+  mediamtx:
+    image: bluenviron/mediamtx:latest
+    container_name: mediamtx
+    restart: unless-stopped
+    # Host networking so RTSP/HLS ports are directly on the host
+    # (e.g. rtsp://host:8554/op25, http://host:8888/op25/index.m3u8).
+    network_mode: host
+
+  # OP25 radio decoder + shim + ffmpeg → MediaMTX
+  op25-radio-stream:
+    # Build the image from the local Dockerfile in this repo
+    build: .
+    image: op25-radio-stream:latest
+    container_name: op25-radio-stream
+    restart: unless-stopped
+    # Host networking so:
+    #   - OP25 can see the RTL-SDR at /dev/bus/usb
+    #   - ffmpeg can reach MediaMTX on 127.0.0.1:8554
+    network_mode: host
+    devices:
+      # Pass the RTL-SDR USB device(s) through to the container
+      - /dev/bus/usb:/dev/bus/usb
+    environment:
+      # Radio / OP25 settings
+      OP25_FREQ: "${OP25_FREQ:-463.725e6}"        # Control / voice channel frequency (Hz, e.g. 463.725e6 Hz = 463.725 MHz)
+      OP25_ARGS: "${OP25_ARGS:-rtl}"              # OP25 --args (which RTL-SDR device to use)
+      OP25_LNA: "${OP25_LNA:-49}"                 # LNA gain (dB) passed via -N "LNA:<value>"
+      OP25_SAMP_RATE: "${OP25_SAMP_RATE:-960000}" # SDR sample rate in Hz
+      OP25_OFFSET: "${OP25_OFFSET:-17000}"        # Frequency offset in Hz (OP25 -o)
+
+      # Audio plumbing
+      OP25_UDP_PORT: "${OP25_UDP_PORT:-23456}"    # UDP port where OP25 sends decoded audio
+      PCM_TCP_PORT: "${PCM_TCP_PORT:-19000}"      # TCP port where the shim exposes continuous PCM to ffmpeg
+
+      # Audio processing
+      OP25_MIN_BUFFER_MS: "${OP25_MIN_BUFFER_MS:-250}"  # Min jitter buffer size in ms (0 = disable jitter buffer)
+
+      # OP25 status web UI
+      OP25_UI_PORT: "${OP25_UI_PORT:-8080}"       # http://host:8080/ (inside host network namespace)
+
+      # ffmpeg → MediaMTX target
+      MEDIAMTX_RTSP_URL: "${MEDIAMTX_RTSP_URL:-rtsp://127.0.0.1:8554/op25}"
+      FFMPEG_LOGLEVEL: "${FFMPEG_LOGLEVEL:-warning}"
