@@ -1,30 +1,85 @@
 version: "3.9"
 
+# Reusable env blocks so we don't repeat values.
+x-icecast-auth: &icecast_auth
+  ICECAST_SOURCE_PASSWORD: "${ICECAST_SOURCE_PASSWORD:-hackme}"
+  ICECAST_ADMIN_PASSWORD: "${ICECAST_ADMIN_PASSWORD:-admin}"
+  ICECAST_PASSWORD: "${ICECAST_PASSWORD:-hackme}"
+  ICECAST_RELAY_PASSWORD: "${ICECAST_RELAY_PASSWORD:-relay}"
+
 services:
-  # MediaMTX: RTSP/HLS server that receives AAC audio from ffmpeg
-  # and serves it out to clients (VLC, browser, etc).
+  # MediaMTX: RTSP/HLS server that ingests AAC from ffmpeg and serves
+  # RTSP/HLS streams to clients (VLC, browser, etc).
   mediamtx:
-    image: bluenviron/mediamtx:latest
+    image: bluenviron/mediamtx:1.15.5
     container_name: mediamtx
     restart: unless-stopped
+
     # Host networking so RTSP/HLS ports are directly on the host
     # (e.g. rtsp://host:8554/op25, http://host:8888/op25/index.m3u8).
     network_mode: host
 
-  # OP25 radio decoder + shim + ffmpeg → MediaMTX
+    environment:
+      # Core protocols
+      MTX_PROTOCOLS: tcp
+      MTX_RTSPADDRESS: :8554
+      MTX_HTTPADDRESS: :8888
+
+      # Keep HLS available for browsers
+      MTX_HLSENABLE: "yes"
+      MTX_HLSVARIANT: mpegts
+      MTX_HLSSEGMENTDURATION: 1s
+      MTX_HLSALWAYSREMUX: "yes"
+
+  # Icecast: HTTP fanout server for low-latency AAC (perfect for embedded clients)
+  icecast:
+    image: majorcadevs/icecast:latest
+    container_name: icecast
+    restart: unless-stopped
+
+    # Host networking so Icecast ports are directly on the host
+    # (e.g. http://192.168.1.10:8091/op25.aac).
+    network_mode: host
+
+    environment:
+      <<: *icecast_auth
+
+      # Icecast listen port (changing from default 8000 to avoid conflicts)
+      IC_LISTEN_PORT: "8091"
+
+      # Enable template generation so env vars are applied to icecast.xml
+      GENERATE_TEMPLATE: "True"
+
+      # Avoid noisy warning + generate correct URLs in playlists/status pages
+      IC_HOSTNAME: "${ICECAST_HOSTNAME:-localhost}"
+
+      # Map existing ICECAST_* secrets to MajorcaDevs IC_* env vars
+      IC_SOURCE_PASSWORD: "${ICECAST_SOURCE_PASSWORD:-hackme}"
+      IC_ADMIN_PASSWORD: "${ICECAST_ADMIN_PASSWORD:-admin}"
+      IC_MASTER_RELAY_PASSWORD: "${ICECAST_RELAY_PASSWORD:-relay}"
+
+      # Low-latency tuning
+      IC_QUEUE_SIZE: "65536"
+      IC_BURST_SIZE: "8192"
+
+  # OP25 radio decoder + shim + ffmpeg encoder/publishers
   op25-radio-stream:
     # Build the image from the local Dockerfile in this repo
     build: .
     image: op25-radio-stream:latest
     container_name: op25-radio-stream
     restart: unless-stopped
+
     # Host networking so:
     #   - OP25 can see the RTL-SDR at /dev/bus/usb
     #   - ffmpeg can reach MediaMTX on 127.0.0.1:8554
+    #   - ffmpeg can reach Icecast on 127.0.0.1:8091
     network_mode: host
+
     devices:
       # Pass the RTL-SDR USB device(s) through to the container
       - /dev/bus/usb:/dev/bus/usb
+
     environment:
       # Radio / OP25 settings
       OP25_FREQ: "${OP25_FREQ:-463.725e6}"        # Control / voice channel frequency (Hz, e.g. 463.725e6 Hz = 463.725 MHz)
@@ -36,13 +91,33 @@ services:
       # Audio plumbing
       OP25_UDP_PORT: "${OP25_UDP_PORT:-23456}"    # UDP port where OP25 sends decoded audio
       PCM_TCP_PORT: "${PCM_TCP_PORT:-19000}"      # TCP port where the shim exposes continuous PCM to ffmpeg
-
-      # Audio processing
       OP25_MIN_BUFFER_MS: "${OP25_MIN_BUFFER_MS:-250}"  # Min jitter buffer size in ms (0 = disable jitter buffer)
 
       # OP25 status web UI
       OP25_UI_PORT: "${OP25_UI_PORT:-8080}"       # http://host:8080/ (inside host network namespace)
 
+      # Display-only: override what host/IP is shown in printed endpoints (optional)
+      PUBLIC_HOST: "${PUBLIC_HOST:-}"
+
       # ffmpeg → MediaMTX target
-      MEDIAMTX_RTSP_URL: "${MEDIAMTX_RTSP_URL:-rtsp://127.0.0.1:8554/op25}"
+      MEDIAMTX_HOST: "127.0.0.1"
+      MEDIAMTX_RTSP_PORT: "8554"
+      MEDIAMTX_PATH: "/op25"
+
+      # ffmpeg → Icecast target
+      ICECAST_HOST: "127.0.0.1"
+      ICECAST_PORT: "8091"
+      ICECAST_MOUNT: "/op25.aac"
+
+      # Keep one source of truth for Icecast passwords
+      <<: *icecast_auth
+
+      # Encoder settings
+      AAC_BITRATE: "${AAC_BITRATE:-64k}"
+      AAC_SR: "${AAC_SR:-44100}"
       FFMPEG_LOGLEVEL: "${FFMPEG_LOGLEVEL:-warning}"
+
+      # Multicast between encoder and publishers
+      MCAST_ADDR: "${MCAST_ADDR:-239.10.10.10}"
+      MCAST_PORT: "${MCAST_PORT:-5004}"
+      MCAST_TTL: "${MCAST_TTL:-1}"
