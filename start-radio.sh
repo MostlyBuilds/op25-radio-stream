@@ -156,7 +156,6 @@ op25_loop() {
       -f "${OP25_FREQ}" \
       -o "${OP25_OFFSET}" \
       -q 1 \
-      -r 8000 \
       -V \
       -D fsk4 \
       -w -W 127.0.0.1 -u "${OP25_UDP_PORT}" \
