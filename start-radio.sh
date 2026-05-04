@@ -40,7 +40,7 @@ FFMPEG_LOGLEVEL="${FFMPEG_LOGLEVEL:-warning}"           # ffmpeg log level
 
 # Audio normalization / speech leveling
 AUDIO_NORMALIZE="${AUDIO_NORMALIZE:-true}"              # Enable speech-focused normalization
-AUDIO_SPEECH_THRESHOLD="${AUDIO_SPEECH_THRESHOLD:-0.02}"# Ignore very low-level noise/silence
+AUDIO_SPEECH_THRESHOLD="${AUDIO_SPEECH_THRESHOLD:-0.02}" # Ignore very low-level noise/silence
 AUDIO_SPEECH_EXPANSION="${AUDIO_SPEECH_EXPANSION:-6}"   # How aggressively to raise quiet speech
 AUDIO_SPEECH_COMPRESSION="${AUDIO_SPEECH_COMPRESSION:-2}" # How much to tame louder speech
 AUDIO_SPEECH_RAISE="${AUDIO_SPEECH_RAISE:-0.004}"       # Upward gain adaptation speed
