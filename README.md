@@ -131,6 +131,8 @@ These environment variables tune the radio, audio pipeline, and publishing behav
 | `OP25_UDP_PORT`       | `23456`   | UDP port where OP25 sends 8 kHz mono raw audio samples |
 | `PCM_TCP_PORT`        | `19000`   | TCP port where the shim exposes continuous PCM to ffmpeg |
 | `OP25_MIN_BUFFER_MS`  | `250`     | Jitter buffer size in ms (0 = disable) |
+| `UDP_RCVBUF_BYTES`    | `1048576` | UDP receive buffer size used by the shim to reduce burst packet drops |
+| `SHIM_STATS_INTERVAL_S` | `30`    | How often the shim emits underrun / zero-fill / buffer-drop stats to logs (`0` disables stats) |
 | `INJECT_UDP_PORT`     | `23457`   | Optional UDP port for injected test audio (s16le, 8 kHz mono) |
 | `INJECT_HOLD_MS`      | `750`     | Hold window to keep prioritizing injection after last injected packet |
 | `MAX_BUFFER_SECONDS`  | `30`      | Safety cap for internal buffers |
@@ -142,6 +144,24 @@ These environment variables tune the radio, audio pipeline, and publishing behav
 | `AAC_BITRATE`     | `64k`    | AAC bitrate |
 | `AAC_SR`          | `44100`  | Output sample rate (Hz) |
 | `FFMPEG_LOGLEVEL` | `warning` | ffmpeg log level (`info`, `debug`, etc.) |
+| `AUDIO_NORMALIZE` | `true`   | Enable speech-focused normalization before AAC encode |
+| `AUDIO_SPEECH_THRESHOLD` | `0.02` | Ignore very low-level noise / silence while normalizing |
+| `AUDIO_SPEECH_EXPANSION` | `6` | How aggressively quiet speech is lifted |
+| `AUDIO_SPEECH_COMPRESSION` | `2` | How much louder voices are pushed back down |
+| `AUDIO_SPEECH_RAISE` | `0.004` | Speed of gain increase for quiet speech |
+| `AUDIO_SPEECH_FALL` | `0.002` | Speed of gain decrease for louder speech |
+| `AUDIO_SPEECH_PEAK` | `0.9` | Peak target used by the speech normalizer |
+| `AUDIO_LIMIT` | `0.9` | Final limiter ceiling |
+| `AUDIO_LIMIT_ATTACK_MS` | `5` | Final limiter attack time |
+| `AUDIO_LIMIT_RELEASE_MS` | `50` | Final limiter release time |
+
+`AUDIO_NORMALIZE=true` is the new default. The encoder now band-limits voice audio,
+applies `speechnorm` to lift quiet talkers and gently tame louder ones, then runs a
+final limiter to keep peaks under control.
+
+The shim also emits periodic reliability stats in `docker logs`. If you see
+`active_underruns` or `buffer_drop_events` climbing during live traffic, that is a
+strong signal that packets are arriving too bursty or being dropped before encoding.
 
 ### Multicast bus (encoder → publishers)
 

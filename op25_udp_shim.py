@@ -101,6 +101,10 @@ INJECT_HOLD_S = max(0.0, INJECT_HOLD_MS / 1000.0)
 MAX_BUFFER_SECONDS = float(os.environ.get("MAX_BUFFER_SECONDS", "30"))
 MAX_BUFFER_BYTES = int(SAMPLE_RATE * MAX_BUFFER_SECONDS * BYTES_PER_SAMPLE)
 
+# Socket tuning / observability
+UDP_RCVBUF_BYTES = int(os.environ.get("UDP_RCVBUF_BYTES", "1048576"))
+STATS_INTERVAL_S = max(0.0, float(os.environ.get("SHIM_STATS_INTERVAL_S", "30")))
+
 # Jitter buffer configuration:
 _MIN_BUFFER_MS_ENV = int(os.environ.get("OP25_MIN_BUFFER_MS", "250"))
 if _MIN_BUFFER_MS_ENV < 0:
@@ -135,17 +139,31 @@ def _drain_udp(sock: socket.socket, buf: bytearray) -> int:
     return added
 
 
-def _cap_buffer(buf: bytearray, max_bytes: int) -> None:
+def _cap_buffer(buf: bytearray, max_bytes: int) -> int:
     """Keep only the newest max_bytes to avoid runaway memory growth."""
-    if len(buf) > max_bytes:
+    dropped = max(0, len(buf) - max_bytes)
+    if dropped > 0:
         # Drop oldest data
-        del buf[: len(buf) - max_bytes]
+        del buf[:dropped]
+    return dropped
 
 
 def _enforce_sample_alignment(buf: bytearray) -> None:
     """Ensure s16le alignment (2 bytes per sample) to avoid sample-boundary drift."""
     if len(buf) & 1:
         del buf[-1]
+
+
+def _buffer_ms(buf: bytearray) -> float:
+    return (len(buf) / BYTES_PER_SAMPLE) * 1000.0 / SAMPLE_RATE
+
+
+def _configure_udp_socket(sock: socket.socket, port: int, label: str) -> None:
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, UDP_RCVBUF_BYTES)
+    sock.bind(("0.0.0.0", port))
+    sock.setblocking(False)
+    actual = sock.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF)
+    _log(f"Listening for {label} on 0.0.0.0:{port} (rcvbuf={actual} bytes)")
 
 
 def main() -> None:
@@ -164,15 +182,12 @@ def main() -> None:
 
     # 1a) Create a non-blocking UDP socket to receive audio from OP25.
     udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    udp_sock.bind(("0.0.0.0", UDP_PORT))
-    udp_sock.setblocking(False)
-    _log(f"Listening for OP25 UDP audio on 0.0.0.0:{UDP_PORT}")
+    _configure_udp_socket(udp_sock, UDP_PORT, "OP25 UDP audio")
 
     # 1b) Create a non-blocking UDP socket to receive optional injected test audio.
     inject_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    inject_sock.bind(("0.0.0.0", INJECT_UDP_PORT))
-    inject_sock.setblocking(False)
-    _log(f"Listening for INJECT UDP audio on 0.0.0.0:{INJECT_UDP_PORT} (hold {INJECT_HOLD_MS}ms)")
+    _configure_udp_socket(inject_sock, INJECT_UDP_PORT, "INJECT UDP audio")
+    _log(f"Injection hold window: {INJECT_HOLD_MS}ms")
 
     if MIN_BUFFER_MS > 0:
         _log(
@@ -213,6 +228,16 @@ def main() -> None:
             op25_primed = MIN_BUFFER_BYTES == 0
             last_op25_rx_time = 0.0
             OP25_IDLE_RESET_S = 0.40  # treat OP25 as "idle/new call" after this much silence
+            ACTIVE_AUDIO_WINDOW_S = 0.20  # if OP25 recently sent audio, underflows are suspicious
+
+            stats_started = time.monotonic()
+            op25_rx_bytes = 0
+            inject_rx_bytes = 0
+            op25_zero_fill_bytes = 0
+            inject_zero_fill_bytes = 0
+            active_underrun_frames = 0
+            dropped_buffer_bytes = 0
+            dropped_buffer_events = 0
 
             # Use monotonic time for stable pacing (immune to wall-clock jumps).
             frame_interval = FRAME_SAMPLES / SAMPLE_RATE
@@ -226,11 +251,16 @@ def main() -> None:
                     added_inject = _drain_udp(inject_sock, inject_buf)
                     if added_inject > 0:
                         last_inject_time = now
+                        inject_rx_bytes += added_inject
                     _enforce_sample_alignment(inject_buf)
-                    _cap_buffer(inject_buf, MAX_BUFFER_BYTES)
+                    dropped = _cap_buffer(inject_buf, MAX_BUFFER_BYTES)
+                    if dropped > 0:
+                        dropped_buffer_bytes += dropped
+                        dropped_buffer_events += 1
 
                     added_op25 = _drain_udp(udp_sock, audio_buf)
                     if added_op25 > 0:
+                        op25_rx_bytes += added_op25
                         # If OP25 was idle for a while, this looks like a new call: re-arm priming.
                         if last_op25_rx_time == 0.0 or (now - last_op25_rx_time) > OP25_IDLE_RESET_S:
                             op25_primed = MIN_BUFFER_BYTES == 0
@@ -241,7 +271,10 @@ def main() -> None:
                             op25_primed = MIN_BUFFER_BYTES == 0
 
                     _enforce_sample_alignment(audio_buf)
-                    _cap_buffer(audio_buf, MAX_BUFFER_BYTES)
+                    dropped = _cap_buffer(audio_buf, MAX_BUFFER_BYTES)
+                    if dropped > 0:
+                        dropped_buffer_bytes += dropped
+                        dropped_buffer_events += 1
 
                     # Send at most a bounded number of frames per loop to avoid giant catch-up bursts.
                     frames_sent = 0
@@ -260,11 +293,13 @@ def main() -> None:
                                 missing = bytes_needed - len(inject_buf)
                                 chunk = bytes(inject_buf) + b"\x00" * missing
                                 inject_buf.clear()
+                                inject_zero_fill_bytes += missing
                         else:
                             # Normal OP25 behavior (with optional jitter buffer).
                             if len(audio_buf) >= bytes_needed:
                                 if (MIN_BUFFER_BYTES > 0) and (not op25_primed) and (len(audio_buf) < MIN_BUFFER_BYTES):
                                     chunk = b"\x00" * bytes_needed
+                                    op25_zero_fill_bytes += bytes_needed
                                 else:
                                     chunk = audio_buf[:bytes_needed]
                                     del audio_buf[:bytes_needed]
@@ -275,6 +310,9 @@ def main() -> None:
                                 had_any = len(audio_buf) > 0
                                 chunk = bytes(audio_buf) + b"\x00" * missing
                                 audio_buf.clear()
+                                op25_zero_fill_bytes += missing
+                                if last_op25_rx_time != 0.0 and (now - last_op25_rx_time) <= ACTIVE_AUDIO_WINDOW_S:
+                                    active_underrun_frames += 1
                                 if (MIN_BUFFER_BYTES > 0) and (not op25_primed) and had_any:
                                     op25_primed = True
 
@@ -296,6 +334,28 @@ def main() -> None:
                     else:
                         # If we're behind, avoid busy-looping: yield briefly.
                         time.sleep(0.001)
+
+                    if STATS_INTERVAL_S > 0 and (now - stats_started) >= STATS_INTERVAL_S:
+                        _log(
+                            "stats: "
+                            f"op25_rx={op25_rx_bytes}B "
+                            f"inject_rx={inject_rx_bytes}B "
+                            f"op25_zero_fill={op25_zero_fill_bytes}B "
+                            f"inject_zero_fill={inject_zero_fill_bytes}B "
+                            f"active_underruns={active_underrun_frames} "
+                            f"buffer_drop_events={dropped_buffer_events} "
+                            f"buffer_drop_bytes={dropped_buffer_bytes} "
+                            f"op25_buf_ms={_buffer_ms(audio_buf):.1f} "
+                            f"inject_buf_ms={_buffer_ms(inject_buf):.1f}"
+                        )
+                        stats_started = now
+                        op25_rx_bytes = 0
+                        inject_rx_bytes = 0
+                        op25_zero_fill_bytes = 0
+                        inject_zero_fill_bytes = 0
+                        active_underrun_frames = 0
+                        dropped_buffer_bytes = 0
+                        dropped_buffer_events = 0
 
             except (BrokenPipeError, ConnectionResetError):
                 pass

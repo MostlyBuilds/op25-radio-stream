@@ -38,6 +38,18 @@ OP25_UI_PORT="${OP25_UI_PORT:-8080}"                    # HTTP port for OP25 sta
 
 FFMPEG_LOGLEVEL="${FFMPEG_LOGLEVEL:-warning}"           # ffmpeg log level
 
+# Audio normalization / speech leveling
+AUDIO_NORMALIZE="${AUDIO_NORMALIZE:-true}"              # Enable speech-focused normalization
+AUDIO_SPEECH_THRESHOLD="${AUDIO_SPEECH_THRESHOLD:-0.02}"# Ignore very low-level noise/silence
+AUDIO_SPEECH_EXPANSION="${AUDIO_SPEECH_EXPANSION:-6}"   # How aggressively to raise quiet speech
+AUDIO_SPEECH_COMPRESSION="${AUDIO_SPEECH_COMPRESSION:-2}" # How much to tame louder speech
+AUDIO_SPEECH_RAISE="${AUDIO_SPEECH_RAISE:-0.004}"       # Upward gain adaptation speed
+AUDIO_SPEECH_FALL="${AUDIO_SPEECH_FALL:-0.002}"         # Downward gain adaptation speed
+AUDIO_SPEECH_PEAK="${AUDIO_SPEECH_PEAK:-0.9}"           # Peak target inside speechnorm
+AUDIO_LIMIT="${AUDIO_LIMIT:-0.9}"                       # Final hard ceiling after normalization
+AUDIO_LIMIT_ATTACK_MS="${AUDIO_LIMIT_ATTACK_MS:-5}"     # Limiter attack
+AUDIO_LIMIT_RELEASE_MS="${AUDIO_LIMIT_RELEASE_MS:-50}"  # Limiter release
+
 # MediaMTX publish target (RTSP ingest) - MediaMTX will fan out RTSP and HLS to clients
 # Backward compatible:
 #   - If MEDIAMTX_RTSP_URL is set, use it as-is.
@@ -88,6 +100,13 @@ log() {
   echo "[start-radio.sh] $*"
 }
 
+is_true() {
+  case "${1,,}" in
+    1|true|yes|on) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 log_stream_endpoints() {
   local path_no_trailing="${MEDIAMTX_PATH%/}"
 
@@ -121,6 +140,7 @@ log_stream_endpoints() {
 
 log "Starting op25_udp_shim.py shim..."
 OP25_UDP_PORT="${OP25_UDP_PORT}" PCM_TCP_PORT="${PCM_TCP_PORT}" OP25_MIN_BUFFER_MS="${OP25_MIN_BUFFER_MS}" \
+  UDP_RCVBUF_BYTES="${UDP_RCVBUF_BYTES:-1048576}" SHIM_STATS_INTERVAL_S="${SHIM_STATS_INTERVAL_S:-30}" \
   /usr/local/bin/op25_udp_shim.py &
 PCM_SHIM_PID=$!
 log "op25_udp_shim.py running as PID ${PCM_SHIM_PID}"
@@ -182,24 +202,33 @@ op25_loop() {
 
 encoder_loop() {
   local announced=0
+  local audio_filters
+  local normalize_enabled=0
+
+  audio_filters="aresample=${AAC_SR}:async=1:min_hard_comp=0.100:first_pts=0,highpass=f=150,lowpass=f=3400"
+  if is_true "${AUDIO_NORMALIZE}"; then
+    normalize_enabled=1
+    audio_filters+=",speechnorm=e=${AUDIO_SPEECH_EXPANSION}:c=${AUDIO_SPEECH_COMPRESSION}:t=${AUDIO_SPEECH_THRESHOLD}:r=${AUDIO_SPEECH_RAISE}:f=${AUDIO_SPEECH_FALL}:p=${AUDIO_SPEECH_PEAK}"
+  fi
+  audio_filters+=",alimiter=limit=${AUDIO_LIMIT}:attack=${AUDIO_LIMIT_ATTACK_MS}:release=${AUDIO_LIMIT_RELEASE_MS}:level=disabled"
 
   while true; do
     log "Starting encoder → MPEG-TS multicast (${MCAST_OUT_URL})..."
+    if [[ "${normalize_enabled}" -eq 1 ]]; then
+      log "Audio normalization: enabled (speechnorm + limiter)"
+    else
+      log "Audio normalization: disabled (band-limit + limiter only)"
+    fi
 
-    # NOTE: Avoid heavy lookahead filters (like large-window dynaudnorm) if you care about latency.
-    # Keep it simple: resample, limiter, and optional gain.
+    # Keep the chain low-latency: resample, band-limit for narrowband voice, optional
+    # speech normalization, then a final limiter to catch peaks.
     ffmpeg -hide_banner -loglevel "${FFMPEG_LOGLEVEL}" \
       -fflags nobuffer -flags low_delay \
       -use_wallclock_as_timestamps 1 \
       -thread_queue_size 32768 \
       -f s16le -ac 1 -ar 8000 \
       -i "tcp://127.0.0.1:${PCM_TCP_PORT}" \
-      -filter_complex "\
-        [0:a]
-          aresample=${AAC_SR}:async=1:min_hard_comp=0.100:first_pts=0,
-          alimiter=limit=0.9:level=disabled
-        [aout]" \
-      -map "[aout]" \
+      -af "${audio_filters}" \
       -c:a aac -profile:a aac_low -b:a "${AAC_BITRATE}" -ac 1 -ar "${AAC_SR}" \
       -muxpreload 0 -muxdelay 0 -flush_packets 1 \
       -f mpegts "${MCAST_OUT_URL}" &

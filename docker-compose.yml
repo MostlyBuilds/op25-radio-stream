@@ -14,6 +14,11 @@ services:
     image: bluenviron/mediamtx:1.15.5
     container_name: mediamtx
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
 
     # Host networking so RTSP/HLS ports are directly on the host
     # (e.g. rtsp://host:8554/op25, http://host:8888/op25/index.m3u8).
@@ -36,6 +41,11 @@ services:
     image: majorcadevs/icecast:latest
     container_name: icecast
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
 
     # Host networking so Icecast ports are directly on the host
     # (e.g. http://192.168.1.10:8091/op25.aac).
@@ -69,6 +79,11 @@ services:
     image: op25-radio-stream:latest
     container_name: op25-radio-stream
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
 
     # Host networking so:
     #   - OP25 can see the RTL-SDR at /dev/bus/usb
@@ -92,6 +107,8 @@ services:
       OP25_UDP_PORT: "${OP25_UDP_PORT:-23456}"    # UDP port where OP25 sends decoded audio
       PCM_TCP_PORT: "${PCM_TCP_PORT:-19000}"      # TCP port where the shim exposes continuous PCM to ffmpeg
       OP25_MIN_BUFFER_MS: "${OP25_MIN_BUFFER_MS:-250}"  # Min jitter buffer size in ms (0 = disable jitter buffer)
+      UDP_RCVBUF_BYTES: "${UDP_RCVBUF_BYTES:-1048576}"  # Larger UDP receive buffer to reduce burst drops
+      SHIM_STATS_INTERVAL_S: "${SHIM_STATS_INTERVAL_S:-30}" # Periodic shim stats in docker logs
 
       # OP25 status web UI
       OP25_UI_PORT: "${OP25_UI_PORT:-8080}"       # http://host:8080/ (inside host network namespace)
@@ -116,6 +133,16 @@ services:
       AAC_BITRATE: "${AAC_BITRATE:-64k}"
       AAC_SR: "${AAC_SR:-44100}"
       FFMPEG_LOGLEVEL: "${FFMPEG_LOGLEVEL:-warning}"
+      AUDIO_NORMALIZE: "${AUDIO_NORMALIZE:-true}"
+      AUDIO_SPEECH_THRESHOLD: "${AUDIO_SPEECH_THRESHOLD:-0.02}"
+      AUDIO_SPEECH_EXPANSION: "${AUDIO_SPEECH_EXPANSION:-6}"
+      AUDIO_SPEECH_COMPRESSION: "${AUDIO_SPEECH_COMPRESSION:-2}"
+      AUDIO_SPEECH_RAISE: "${AUDIO_SPEECH_RAISE:-0.004}"
+      AUDIO_SPEECH_FALL: "${AUDIO_SPEECH_FALL:-0.002}"
+      AUDIO_SPEECH_PEAK: "${AUDIO_SPEECH_PEAK:-0.9}"
+      AUDIO_LIMIT: "${AUDIO_LIMIT:-0.9}"
+      AUDIO_LIMIT_ATTACK_MS: "${AUDIO_LIMIT_ATTACK_MS:-5}"
+      AUDIO_LIMIT_RELEASE_MS: "${AUDIO_LIMIT_RELEASE_MS:-50}"
 
       # Multicast between encoder and publishers
       MCAST_ADDR: "${MCAST_ADDR:-239.10.10.10}"
