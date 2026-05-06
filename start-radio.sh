@@ -47,6 +47,7 @@ AUDIO_COMPRESSOR_RATIO="${AUDIO_COMPRESSOR_RATIO:-4}"   # Compressor ratio
 AUDIO_COMPRESSOR_ATTACK_MS="${AUDIO_COMPRESSOR_ATTACK_MS:-5}"   # Compressor attack
 AUDIO_COMPRESSOR_RELEASE_MS="${AUDIO_COMPRESSOR_RELEASE_MS:-120}" # Compressor release
 AUDIO_COMPRESSOR_MAKEUP="${AUDIO_COMPRESSOR_MAKEUP:-1.2}" # Makeup gain after compression
+AUDIO_POST_GAIN="${AUDIO_POST_GAIN:-2.0}"               # Final output gain after compression, before limiter
 AUDIO_SPEECH_THRESHOLD="${AUDIO_SPEECH_THRESHOLD:-0.02}" # Ignore very low-level noise/silence
 AUDIO_SPEECH_EXPANSION="${AUDIO_SPEECH_EXPANSION:-6}"   # How aggressively to raise quiet speech
 AUDIO_SPEECH_COMPRESSION="${AUDIO_SPEECH_COMPRESSION:-2}" # How much to tame louder speech
@@ -221,7 +222,7 @@ encoder_loop() {
       audio_filters+=",speechnorm=e=${AUDIO_SPEECH_EXPANSION}:c=${AUDIO_SPEECH_COMPRESSION}:t=${AUDIO_SPEECH_THRESHOLD}:r=${AUDIO_SPEECH_RAISE}:f=${AUDIO_SPEECH_FALL}:p=${AUDIO_SPEECH_PEAK}"
     else
       level_mode="compressor"
-      audio_filters+=",volume=volume=${AUDIO_PRE_GAIN},acompressor=threshold=${AUDIO_COMPRESSOR_THRESHOLD}:ratio=${AUDIO_COMPRESSOR_RATIO}:attack=${AUDIO_COMPRESSOR_ATTACK_MS}:release=${AUDIO_COMPRESSOR_RELEASE_MS}:makeup=${AUDIO_COMPRESSOR_MAKEUP}:link=average:detection=rms"
+      audio_filters+=",volume=volume=${AUDIO_PRE_GAIN},acompressor=threshold=${AUDIO_COMPRESSOR_THRESHOLD}:ratio=${AUDIO_COMPRESSOR_RATIO}:attack=${AUDIO_COMPRESSOR_ATTACK_MS}:release=${AUDIO_COMPRESSOR_RELEASE_MS}:makeup=${AUDIO_COMPRESSOR_MAKEUP}:link=average:detection=rms,volume=volume=${AUDIO_POST_GAIN}"
     fi
   fi
   audio_filters+=",alimiter=limit=${AUDIO_LIMIT}:attack=${AUDIO_LIMIT_ATTACK_MS}:release=${AUDIO_LIMIT_RELEASE_MS}:level=disabled"
