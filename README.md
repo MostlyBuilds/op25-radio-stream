@@ -145,6 +145,13 @@ These environment variables tune the radio, audio pipeline, and publishing behav
 | `AAC_SR`          | `44100`  | Output sample rate (Hz) |
 | `FFMPEG_LOGLEVEL` | `warning` | ffmpeg log level (`info`, `debug`, etc.) |
 | `AUDIO_NORMALIZE` | `true`   | Enable speech-focused normalization before AAC encode |
+| `AUDIO_LEVEL_MODE` | `compressor` | `compressor` for immediate fixed gain + compression, or `speechnorm` for adaptive leveling |
+| `AUDIO_PRE_GAIN` | `2.5` | Fixed gain applied before compression in `compressor` mode |
+| `AUDIO_COMPRESSOR_THRESHOLD` | `0.10` | Compressor threshold in `compressor` mode |
+| `AUDIO_COMPRESSOR_RATIO` | `4` | Compressor ratio in `compressor` mode |
+| `AUDIO_COMPRESSOR_ATTACK_MS` | `5` | Compressor attack time in `compressor` mode |
+| `AUDIO_COMPRESSOR_RELEASE_MS` | `120` | Compressor release time in `compressor` mode |
+| `AUDIO_COMPRESSOR_MAKEUP` | `1.2` | Makeup gain after compression in `compressor` mode |
 | `AUDIO_SPEECH_THRESHOLD` | `0.02` | Ignore very low-level noise / silence while normalizing |
 | `AUDIO_SPEECH_EXPANSION` | `6` | How aggressively quiet speech is lifted |
 | `AUDIO_SPEECH_COMPRESSION` | `2` | How much louder voices are pushed back down |
@@ -155,9 +162,13 @@ These environment variables tune the radio, audio pipeline, and publishing behav
 | `AUDIO_LIMIT_ATTACK_MS` | `5` | Final limiter attack time |
 | `AUDIO_LIMIT_RELEASE_MS` | `50` | Final limiter release time |
 
-`AUDIO_NORMALIZE=true` is the new default. The encoder now band-limits voice audio,
-applies `speechnorm` to lift quiet talkers and gently tame louder ones, then runs a
-final limiter to keep peaks under control.
+`AUDIO_NORMALIZE=true` is the default. The encoder now band-limits voice audio and, by
+default, uses `AUDIO_LEVEL_MODE=compressor` so quiet speech is boosted immediately with
+fixed gain and kept under control with compression plus a final limiter.
+
+If you want the older adaptive behavior, set `AUDIO_LEVEL_MODE=speechnorm`. That mode can
+lift weak speech effectively, but it may ramp during very short transmissions because it
+adapts its gain after audio starts arriving.
 
 The shim also emits periodic reliability stats in `docker logs`. If you see
 `active_underruns` or `buffer_drop_events` climbing during live traffic, that is a

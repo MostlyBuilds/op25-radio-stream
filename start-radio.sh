@@ -39,7 +39,14 @@ OP25_UI_PORT="${OP25_UI_PORT:-8080}"                    # HTTP port for OP25 sta
 FFMPEG_LOGLEVEL="${FFMPEG_LOGLEVEL:-warning}"           # ffmpeg log level
 
 # Audio normalization / speech leveling
-AUDIO_NORMALIZE="${AUDIO_NORMALIZE:-true}"              # Enable speech-focused normalization
+AUDIO_NORMALIZE="${AUDIO_NORMALIZE:-true}"              # Enable speech-focused leveling
+AUDIO_LEVEL_MODE="${AUDIO_LEVEL_MODE:-compressor}"      # compressor (immediate) or speechnorm (adaptive)
+AUDIO_PRE_GAIN="${AUDIO_PRE_GAIN:-2.5}"                 # Fixed input gain before compression/limiting
+AUDIO_COMPRESSOR_THRESHOLD="${AUDIO_COMPRESSOR_THRESHOLD:-0.10}" # Compressor threshold
+AUDIO_COMPRESSOR_RATIO="${AUDIO_COMPRESSOR_RATIO:-4}"   # Compressor ratio
+AUDIO_COMPRESSOR_ATTACK_MS="${AUDIO_COMPRESSOR_ATTACK_MS:-5}"   # Compressor attack
+AUDIO_COMPRESSOR_RELEASE_MS="${AUDIO_COMPRESSOR_RELEASE_MS:-120}" # Compressor release
+AUDIO_COMPRESSOR_MAKEUP="${AUDIO_COMPRESSOR_MAKEUP:-1.2}" # Makeup gain after compression
 AUDIO_SPEECH_THRESHOLD="${AUDIO_SPEECH_THRESHOLD:-0.02}" # Ignore very low-level noise/silence
 AUDIO_SPEECH_EXPANSION="${AUDIO_SPEECH_EXPANSION:-6}"   # How aggressively to raise quiet speech
 AUDIO_SPEECH_COMPRESSION="${AUDIO_SPEECH_COMPRESSION:-2}" # How much to tame louder speech
@@ -204,24 +211,31 @@ encoder_loop() {
   local announced=0
   local audio_filters
   local normalize_enabled=0
+  local level_mode
 
   audio_filters="aresample=${AAC_SR}:async=1:min_hard_comp=0.100:first_pts=0,highpass=f=150,lowpass=f=3400"
+  level_mode="${AUDIO_LEVEL_MODE,,}"
   if is_true "${AUDIO_NORMALIZE}"; then
     normalize_enabled=1
-    audio_filters+=",speechnorm=e=${AUDIO_SPEECH_EXPANSION}:c=${AUDIO_SPEECH_COMPRESSION}:t=${AUDIO_SPEECH_THRESHOLD}:r=${AUDIO_SPEECH_RAISE}:f=${AUDIO_SPEECH_FALL}:p=${AUDIO_SPEECH_PEAK}"
+    if [[ "${level_mode}" == "speechnorm" ]]; then
+      audio_filters+=",speechnorm=e=${AUDIO_SPEECH_EXPANSION}:c=${AUDIO_SPEECH_COMPRESSION}:t=${AUDIO_SPEECH_THRESHOLD}:r=${AUDIO_SPEECH_RAISE}:f=${AUDIO_SPEECH_FALL}:p=${AUDIO_SPEECH_PEAK}"
+    else
+      level_mode="compressor"
+      audio_filters+=",volume=volume=${AUDIO_PRE_GAIN},acompressor=threshold=${AUDIO_COMPRESSOR_THRESHOLD}:ratio=${AUDIO_COMPRESSOR_RATIO}:attack=${AUDIO_COMPRESSOR_ATTACK_MS}:release=${AUDIO_COMPRESSOR_RELEASE_MS}:makeup=${AUDIO_COMPRESSOR_MAKEUP}:link=average:detection=rms"
+    fi
   fi
   audio_filters+=",alimiter=limit=${AUDIO_LIMIT}:attack=${AUDIO_LIMIT_ATTACK_MS}:release=${AUDIO_LIMIT_RELEASE_MS}:level=disabled"
 
   while true; do
     log "Starting encoder → MPEG-TS multicast (${MCAST_OUT_URL})..."
     if [[ "${normalize_enabled}" -eq 1 ]]; then
-      log "Audio normalization: enabled (speechnorm + limiter)"
+      log "Audio normalization: enabled (${level_mode} + limiter)"
     else
       log "Audio normalization: disabled (band-limit + limiter only)"
     fi
 
     # Keep the chain low-latency: resample, band-limit for narrowband voice, optional
-    # speech normalization, then a final limiter to catch peaks.
+    # fixed-gain+compression or speech normalization, then a final limiter to catch peaks.
     ffmpeg -hide_banner -loglevel "${FFMPEG_LOGLEVEL}" \
       -fflags nobuffer -flags low_delay \
       -use_wallclock_as_timestamps 1 \
