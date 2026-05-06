@@ -153,6 +153,8 @@ These environment variables tune the radio, audio pipeline, and publishing behav
 | `AUDIO_COMPRESSOR_RELEASE_MS` | `120` | Compressor release time in `compressor` mode |
 | `AUDIO_COMPRESSOR_MAKEUP` | `1.2` | Makeup gain after compression in `compressor` mode |
 | `AUDIO_POST_GAIN` | `2.0` | Final output gain after compression and before the limiter in `compressor` mode |
+| `AUDIO_HIGHPASS_HZ` | `200` | High-pass cutoff for the speech band EQ |
+| `AUDIO_LOWPASS_HZ` | `3200` | Low-pass cutoff for the speech band EQ |
 | `AUDIO_SPEECH_THRESHOLD` | `0.02` | Ignore very low-level noise / silence while normalizing |
 | `AUDIO_SPEECH_EXPANSION` | `6` | How aggressively quiet speech is lifted |
 | `AUDIO_SPEECH_COMPRESSION` | `2` | How much louder voices are pushed back down |

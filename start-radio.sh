@@ -48,6 +48,8 @@ AUDIO_COMPRESSOR_ATTACK_MS="${AUDIO_COMPRESSOR_ATTACK_MS:-5}"   # Compressor att
 AUDIO_COMPRESSOR_RELEASE_MS="${AUDIO_COMPRESSOR_RELEASE_MS:-120}" # Compressor release
 AUDIO_COMPRESSOR_MAKEUP="${AUDIO_COMPRESSOR_MAKEUP:-1.2}" # Makeup gain after compression
 AUDIO_POST_GAIN="${AUDIO_POST_GAIN:-2.0}"               # Final output gain after compression, before limiter
+AUDIO_HIGHPASS_HZ="${AUDIO_HIGHPASS_HZ:-200}"           # Speech-band high-pass filter cutoff
+AUDIO_LOWPASS_HZ="${AUDIO_LOWPASS_HZ:-3200}"            # Speech-band low-pass filter cutoff
 AUDIO_SPEECH_THRESHOLD="${AUDIO_SPEECH_THRESHOLD:-0.02}" # Ignore very low-level noise/silence
 AUDIO_SPEECH_EXPANSION="${AUDIO_SPEECH_EXPANSION:-6}"   # How aggressively to raise quiet speech
 AUDIO_SPEECH_COMPRESSION="${AUDIO_SPEECH_COMPRESSION:-2}" # How much to tame louder speech
@@ -214,7 +216,7 @@ encoder_loop() {
   local normalize_enabled=0
   local level_mode
 
-  audio_filters="aresample=${AAC_SR}:async=1:min_hard_comp=0.100:first_pts=0,highpass=f=150,lowpass=f=3400"
+  audio_filters="aresample=${AAC_SR}:async=1:min_hard_comp=0.100:first_pts=0,highpass=f=${AUDIO_HIGHPASS_HZ},lowpass=f=${AUDIO_LOWPASS_HZ}"
   level_mode="${AUDIO_LEVEL_MODE,,}"
   if is_true "${AUDIO_NORMALIZE}"; then
     normalize_enabled=1
